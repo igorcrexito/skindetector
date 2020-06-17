@@ -30,7 +30,7 @@ if __name__ == "__main__":
     image_shape = (height,width,channels)
     composite_model, skin_model, background_model = model.define_composite_model(autoencoder_background, autoencoder_skin, image_shape)
     
-    #fitting the model
+    #fitting the model -> comment the subsequent lines to not execute the training step
     print('--- Training model with original images and binary masks ---')
     skin_model, background_model = model.train_skin_background_models(composite_model, skin_model, background_model, rgb_sequence, hsv_sequence, ycrcb_sequence, output_sequence, background_sequence, width, height, channels, batch_size, number_of_epochs)
     
@@ -43,6 +43,7 @@ if __name__ == "__main__":
     skin_model = model.load_weights('skin')
     background_model = model.load_weights('background')
     
+    #qualitative prediction of images -> crossdataset
     for i in range(0, len(rgb_sequence)):
         output_skin = skin_model.predict([[rgb_sequence[i]],[hsv_sequence[i]], [ycrcb_sequence[i]]])
         output_background = background_model.predict([[rgb_sequence[i]], [hsv_sequence[i]], [ycrcb_sequence[i]]])
