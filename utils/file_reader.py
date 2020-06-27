@@ -2,9 +2,30 @@ import cv2
 import os
 import numpy as np
 from PIL import Image
+
 FLIP, TRANSLATE = (0,1)
 
-def read_training_files(base_path, resized_width, resized_height, augmentation = 0):
+def return_images_path(base_path):
+    
+    #defining list to store input/output data
+    rgb_path_sequence = []
+    output_path_sequence = []
+    
+    #producing composite paths to find images
+    composite_color_path = base_path + 'color/'
+    composite_gt_path = base_path + 'gt/'
+    
+    #retrieving list of images
+    image_list = os.listdir(composite_color_path)
+    groundtruth_list = os.listdir(composite_gt_path)
+
+    for i in range(0, len(image_list)):
+        rgb_path_sequence.append(composite_color_path + image_list[i])
+        output_path_sequence.append(composite_gt_path + groundtruth_list[i])
+    
+    return rgb_path_sequence, output_path_sequence
+
+def read_training_files(base_path, resized_width, resized_height, number_of_steps = 99, current_step = 0, augmentation = 0):
     
     #defining list to store input/output data
     rgb_sequence = []
@@ -18,11 +39,17 @@ def read_training_files(base_path, resized_width, resized_height, augmentation =
     image_list = os.listdir(composite_color_path)
     groundtruth_list = os.listdir(composite_gt_path)
 
-    #getting number of images inside the folders
     number_of_images = len(image_list)
+    images_per_step = 0
+    
+    #checking current step
+    if number_of_steps == 99:
+        images_per_step = number_of_images
+    else:
+        images_per_step = int(number_of_images/number_of_steps)
     
     #iterating over images
-    for i in range(0, number_of_images):
+    for i in range(current_step*images_per_step, (current_step+1)*images_per_step):
         rgb_image = cv2.imread(composite_color_path + image_list[i]) #reading original input data     
         output_mask = cv2.cvtColor(cv2.imread(composite_gt_path + groundtruth_list[i]), cv2.COLOR_BGR2GRAY)  #reading GT data
         ret,output_mask = cv2.threshold(output_mask,0,255,cv2.THRESH_BINARY+cv2.THRESH_OTSU)
@@ -82,6 +109,27 @@ def normalize_and_convert_spaces(rgb_sequence, output_sequence):
             print('Wrong number of channels')
             
     return rgb_list, hsv_sequence, ycrcb_sequence, output_list, background_sequence
+
+def normalize_and_convert_images(rgb_image, output_image):
+    
+    try:
+        #converting images to different colorspaces
+        hsv_image = cv2.cvtColor(rgb_image, cv2.COLOR_BGR2HSV)
+        ycrcb_image = cv2.cvtColor(rgb_image, cv2.COLOR_BGR2YCrCb)
+
+        #normalizando HSV image
+        hsv_image[0] = hsv_image[0]/179.0
+        hsv_image[1] = hsv_image[1]/255.0
+        hsv_image[2] = hsv_image[2]/255.0
+
+        rgb_image = rgb_image/255
+        ycrcb_image = ycrcb_image/255 
+        output_mask = output_mask/255
+
+    except:
+        print('Wrong number of channels')
+            
+    return rgb_image, hsv_image, ycrcb_image, output_mask, 1-output_mask
 
 def augment_image(image, output_mask, transformation):
     
