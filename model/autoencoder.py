@@ -9,6 +9,9 @@ from keras.models import model_from_json
 from utils.keras_contrib import InstanceNormalization
 from keras.models import load_model
 import json
+import utils.file_reader as fr
+
+FLIP, TRANSLATE = (0,1)
 
 def create_skin_detector_model(width, height, channels, supportive_width, supportive_height, supportive_channels, max_number_of_supportive_images):
     input_rgb = Input(shape=(width,height,channels), name='rgb_input')
@@ -22,12 +25,12 @@ def create_skin_detector_model(width, height, channels, supportive_width, suppor
     encoding_ycrcb = input_merging(input_ycrcb)
     
     mixed_representation = concatenate([encoding_rgb, encoding_hsv, encoding_ycrcb], axis = 3) #mixed = 112x112x128
-    print(np.shape(mixed_representation))
+    #print(np.shape(mixed_representation))
     
     #first convolutional block
-    encoding = Conv2D(32, (3,3), activation='relu', padding='same')(mixed_representation)
-    encoding = Conv2D(32, (3,3), activation='relu', padding='same')(encoding)
-    encoding = Conv2D(32, (3,3), activation='relu', padding='same')(encoding)
+    encoding = Conv2D(64, (3,3), activation='relu', padding='same')(mixed_representation)
+    encoding = Conv2D(64, (3,3), activation='relu', padding='same')(encoding)
+    encoding = Conv2D(64, (3,3), activation='relu', padding='same')(encoding)
     encoding_first = MaxPooling2D(pool_size=(2, 2), strides=(2, 2),
                            border_mode='valid')(encoding) #encoding 56x56x64
     
@@ -55,14 +58,14 @@ def create_skin_detector_model(width, height, channels, supportive_width, suppor
     encoding = UpSampling2D(size=(2, 2), name='up1')(encoding) #encoding 28x28x128
     
     #second convolutional block
-    encoding = concatenate([encoding_second, encoding], axis = 3) #28x28x128
+    encoding = add([encoding_second, encoding]) #28x28x64
     encoding = Conv2D(128, (3,3), activation='relu', padding='same')(encoding)
     encoding = Conv2D(64, (3,3), activation='relu', padding='same')(encoding)
     encoding = Conv2D(64, (3,3), activation='relu', padding='same')(encoding)
     encoding = UpSampling2D(size=(2, 2), name='up2')(encoding) #encoding 56x56x64
     
     #third convolutional block
-    encoding = concatenate([encoding_first, encoding], axis = 3) #56x56x128
+    encoding = add([encoding_first, encoding]) #56x56x64
     encoding = Conv2D(128, (3,3), activation='relu', padding='same')(encoding)
     encoding = Conv2D(96, (3,3), activation='relu', padding='same')(encoding)
     encoding = Conv2D(96, (3,3), activation='relu', padding='same')(encoding)
@@ -71,17 +74,18 @@ def create_skin_detector_model(width, height, channels, supportive_width, suppor
     
     #last convolutional block + auxiliary input
     input_supportive = Input(shape=(max_number_of_supportive_images, supportive_width, supportive_height, supportive_channels), name='supportive_hsv') #1024x14x14x3
-    supportive_encoding = Conv3D(12, (3,3,3), activation='sigmoid', padding='same')(input_supportive)
+    supportive_encoding = Conv3D(24, (3,3,3), activation='sigmoid', padding='same')(input_supportive)
+    supportive_encoding = Conv3D(18, (3,3,3), activation='sigmoid', padding='same')(supportive_encoding)
     supportive_encoding = Conv3D(12, (3,3,3), activation='sigmoid', padding='same')(supportive_encoding)
     supportive_encoding = Conv3D(6, (3,3,3), activation='sigmoid', padding='same')(supportive_encoding) #1204224
     supportive_encoding = Reshape((112, 112, 96))(supportive_encoding)
     encoding = subtract([encoding, supportive_encoding]) #112x112x96
     encoding = UpSampling2D(size=(2, 2), name='up4')(encoding) #encoding 224x224x96
     
-    encoding = Dropout(0.5)(encoding)
+    encoding = Dropout(0.25)(encoding)
     encoding = Conv2D(32, (3,3), activation='sigmoid', padding='same')(encoding)
-    encoding = Dropout(0.5)(encoding)
-    encoding = Conv2D(8, (3,3), activation='sigmoid', padding='same')(encoding)
+    encoding = Dropout(0.25)(encoding)
+    encoding = Conv2D(16, (3,3), activation='sigmoid', padding='same')(encoding)
     output = Conv2D(1, (3,3), activation='sigmoid', padding='same')(encoding)
     
     autoencoder = Model([input_rgb, input_hsv, input_ycrcb, input_supportive], [output])
@@ -122,8 +126,8 @@ def input_merging(input):
     encoding1 = MaxPooling2D(pool_size=(2, 2), strides=(2, 2),
                            border_mode='valid')(encoding1)
     
-    encoding2 = Conv2D(16, (5,5), activation='relu', padding='same')(input)
-    encoding2 = Conv2D(16, (5,5), activation='relu', padding='same')(encoding2)
+    encoding2 = Conv2D(32, (5,5), activation='relu', padding='same')(input)
+    encoding2 = Conv2D(32, (5,5), activation='relu', padding='same')(encoding2)
     encoding2 = MaxPooling2D(pool_size=(2, 2), strides=(2, 2),
                            border_mode='valid')(encoding2)
     
@@ -164,7 +168,7 @@ def define_composite_model(background_model, skin_model, image_shape, supportive
     opt = Adam(lr=0.0005, beta_1=0.9, beta_2 = 0.999)
     
     #huber loss on autoencoders -> low converging behavior // mse considering dice difference -> fast convergence
-    composite_model.compile(loss=[huber_loss, huber_loss, 'mse'], optimizer=opt)
+    composite_model.compile(loss=['mse', 'mse', 'mae'], optimizer=opt)
     composite_model.summary()
     return composite_model, skin_model, background_model
 
@@ -181,6 +185,15 @@ def train_skin_background_models(composite_model, skin_model, background_model, 
     background_model.save(background_model_filepath)
     
     return skin_model, background_model
+
+def inter_coef(y_true, y_pred):
+    """
+    Dice = (2*|X & Y|)/ (|X|+ |Y|)
+         =  2*sum(|A*B|)/(sum(A^2)+sum(B^2))
+    ref: https://arxiv.org/pdf/1606.04797v1.pdf
+    """
+    return K.sum(K.abs(y_true * y_pred), axis=-1)
+    
     
 def dice_coef(y_true, y_pred, smooth=1):
     """
@@ -201,11 +214,12 @@ def huber_loss(y_true, y_pred, clip_delta=1.0):
     return tf.where(cond, squared_loss, linear_loss)
 
 def dice_loss(y_true, y_pred):
-    return 1-dice_coef(y_true, y_pred) 
+    return dice_coef(y_true, y_pred)
 
 def dice_layer(tensor):
-    return 1-dice_coef(tensor[0], tensor[1])
-            
+    #return dice_coef(tensor[0], tensor[1])
+    return inter_coef(tensor[0], tensor[1])
+    
 def save_weights(model, model_type):
     model_json = model.to_json()
     with open("model_"+ model_type + ".json", "w") as json_file:
@@ -225,3 +239,69 @@ def load_weights(model_type, model):
     model = model.load_weights("model_"+ model_type + ".h5", cust)
 
     return model
+    
+def data_generator(image_list, gt_list, resized_width, resized_height, batch_size, background=0):
+    
+    while true:
+    
+        #assembling RGB and GT structures to store data
+        rgb_list = []
+        hsv_sequence = []
+        ycrcb_sequence = []
+        output_list = []
+        background_sequence = []
+        
+        #reading images
+        for i in range(0, len(image_list)):
+            rgb_image = cv2.imread(image_list[i]) #rgb
+            output_mask = cv2.cvtColor(cv2.imread(groundtruth_list[i]), cv2.COLOR_BGR2GRAY) #output mask
+            ret,output_mask = cv2.threshold(output_mask,0,255,cv2.THRESH_BINARY+cv2.THRESH_OTSU) #thresholding
+
+            #resizing both images
+            rgb_image = cv2.resize(rgb_image,(resized_width,resized_height))
+            output_mask = cv2.resize(output_mask,(resized_width,resized_height))
+            
+            #augmenting images
+            rgb_flip_image, rgb_flip_output = fr.augment_image(rgb_image, output_mask, FLIP)
+            rgb_translate_image, rgb_translate_output = fr.augment_image(rgb_image, output_mask, TRANSLATE)
+            
+            #converting images to different subspaces and normalizing
+            rgb_image, hsv_image, ycrcb_image, output_image, background_image = fr.normalize_and_convert_images(rgb_image, output_mask)
+            
+            ###################################################################################################
+            #appending original data
+            rgb_list.append(rgb_image)
+            hsv_sequence.append(hsv_image)
+            ycrcb_sequence.append(ycrcb_image)
+            output_list.append(output_image)
+            background_sequence.append(background_image)
+            
+            #appending augmented data
+            rgb_image, hsv_image, ycrcb_image, output_image, background_image = fr.normalize_and_convert_images(rgb_flip_image, rgb_flip_output)
+            
+            rgb_list.append(rgb_image)
+            hsv_sequence.append(hsv_image)
+            ycrcb_sequence.append(ycrcb_image)
+            output_list.append(output_image)
+            background_sequence.append(background_image)
+            
+            rgb_image, hsv_image, ycrcb_image, output_image, background_image = fr.normalize_and_convert_images(rgb_translate_image, rgb_translate_output)
+            
+            rgb_list.append(rgb_image)
+            hsv_sequence.append(hsv_image)
+            ycrcb_sequence.append(ycrcb_image)
+            output_list.append(output_image)
+            background_sequence.append(background_image)
+            ####################################################################################################
+            
+            if len(rgb_list) == batch_size:
+                if background==0:
+                    yield([rgb_list, hsv_sequence, ycrcb_sequence],[output_list])
+                else:
+                    yield([rgb_list, hsv_sequence, ycrcb_sequence],[background_sequence])
+                    
+                rgb_list = []
+                hsv_sequence = []
+                ycrcb_sequence = []
+                output_list = []
+                background_sequence = []
