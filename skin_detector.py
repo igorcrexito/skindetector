@@ -80,6 +80,8 @@ if __name__ == "__main__":
     background_model = load_model("model_" + "background" + ".h5", cust)
     
     averageIoU = 0
+    average_precision = 0
+    average_recall = 0
     
     #qualitative prediction of images -> crossdataset
     for i in range(0, len(rgb_sequence)):
@@ -96,9 +98,15 @@ if __name__ == "__main__":
         groundtruth_image = output_sequence[i]
         
         IoU = metrics.computeIoU(skin_image.astype(np.uint8), groundtruth_image.astype(np.uint8), width, height)
+        precision, recall = metrics.computePrecisionRecall(skin_image.astype(np.uint8), groundtruth_image.astype(np.uint8), width, height)
         print('-----------------------------------------------------------')
         print('IoU: ' + str(IoU))
+        print('IoU: ' + str(precision))
+        print('IoU: ' + str(recall))
         
         averageIoU+= IoU
+        average_precision += precision
+        average_recall += recall
         
     print('Average IoU: '+ str(averageIoU/len(rgb_sequence)))
+    print('Average Precision and Recall: '+ str(average_precision/len(rgb_sequence)) + ', ' + str(average_recall/len(rgb_sequence)))
