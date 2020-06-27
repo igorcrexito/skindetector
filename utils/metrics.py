@@ -34,3 +34,39 @@ def computeIoU(image, groundtruth_mask, width, height):
     #cv2.imshow('rgb_image',groundtruth_mask*255)
         
     return intersection/union
+
+def computePrecisionRecall(image, groundtruth_mask, width, height):
+    
+    image = np.asarray(image)
+    image = np.reshape(image, (width, height, 1))
+    ret,image = cv2.threshold(image,0,1,cv2.THRESH_BINARY+cv2.THRESH_OTSU)
+    
+    groundtruth_mask = np.asarray(groundtruth_mask)
+    groundtruth_mask = np.reshape(groundtruth_mask, (width, height, 1))
+    ret,groundtruth_mask = cv2.threshold(groundtruth_mask,0,1,cv2.THRESH_BINARY+cv2.THRESH_OTSU)
+
+    #computing true and false positive/negative
+    tp = 0
+    tn = 0
+    fn = 0
+    fp = 0
+
+    for i in range(0, width):
+        for j in range(0, height):  
+            if ((groundtruth_mask[i,j] == 1) and (image[i,j] == 1)):
+                tp+= 1
+            
+            elif ((groundtruth_mask[i,j] == 1) and (image[i,j] == 0)):
+                fn+= 1
+            
+            elif ((groundtruth_mask[i,j] == 0) and (image[i,j] == 0)):
+                tn+= 1
+            
+            elif ((groundtruth_mask[i,j] == 0) and (image[i,j] == 1)):
+                fp+= 1
+            
+    
+    recall = tp/(tp+fn)
+    precision = tp/(tp + fp)
+        
+    return precision, recall
